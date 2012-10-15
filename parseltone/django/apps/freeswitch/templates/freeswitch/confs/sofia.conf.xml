@@ -1,0 +1,106 @@
+{% extends "freeswitch/confs/configuration_base.xml" %}
+
+{% block settings %}
+    <global_settings>
+        <param name="log-level" value="{{ global_settings.log_level }}"/>
+        <param name="auto-restart" value="{{ global_settings.auto_restart|yesno:"true,false" }}"/>
+        <param name="debug-presence" value="{{ global_settings.debug_presence }}"/>
+    </global_settings>
+
+    <profiles>
+        {% for profile in profiles %}
+            <profile name="{{ profile.slug }}" domain="{{ profile.domain }}">
+
+                {# TODO: these domain settings aren't stored anywhere currently #}
+                <domains>
+                    <domain name="all" alias="true" parse="false"/>
+                </domains>
+
+                <gateways>
+                    {% for gateway in profile.gateways.all %}
+                        <gateway name="{{ gateway.name }}">
+                            <param name="username" value="{{ gateway.username }}"/>
+                            <param name="password" value="{{ gateway.password }}"/>
+                            <param name="realm" value="{{ gateway.realm }}"/>
+                            <param name="from-user" value="{{ gateway.from_user }}"/>
+                            <param name="from-domain" value="{{ gateway.from_domain }}"/>
+                            <param name="extension" value="{{ gateway.extension }}"/>
+                            <param name="proxy" value="{{ gateway.proxy }}"/>
+                            <param name="register-proxy" value="{{ gateway.register_proxy }}"/>
+                            <param name="expire-seconds" value="{{ gateway.expire_seconds }}"/>
+                            <param name="register" value="{{ gateway.register|yesno:"true,false" }}"/>
+                            <param name="register-transport" value="{{ gateway.register_transport }}"/>
+                            <param name="retry-seconds" value="{{ gateway.retry_seconds }}"/>
+                            <param name="caller-id-in-from" value="{{ gateway.caller_id_in_from }}"/>
+                            <param name="contact-params" value="{{ gateway.contact_params }}"/>
+                            <param name="ping" value="{{ gateway.ping }}"/>
+                        </gateway>
+                    {% endfor %}
+                </gateways>
+                <settings>
+                    <param name="user-agent-string" value="{{ profile.user_agent_string }}"/>
+                    <param name="debug" value="{{ profile.debug }}"/>
+                    <param name="sip-trace" value="{{ profile.sip_trace|yesno:"true,false" }}"/>
+                    <param name="liberal-dtmf" value="{{ profile.liberal_dtmf|yesno:"true,false" }}"/>
+                    <param name="watchdog-enabled" value="{{ profile.watchdog_enabled|yesno:"yes,no" }}"/>
+                    <param name="watchdog-step-timeout" value="{{ profile.watchdog_step_timeout }}"/>
+                    <param name="watchdog-event-timeout" value="{{ profile.watchdog_event_timeout }}"/>
+                    <param name="log-auth-failures" value="{{ profile.log_auth_failures|yesno:"true,false" }}"/>
+                    <param name="forward-unsolicited-mwi-notify" value="{{ profile.forward_unsolicited_mwi_notify|yesno:"true,false" }}"/>
+                    <param name="context" value="{{ profile.context }}"/>
+                    <param name="rfc2833-pt" value="{{ profile.rfc2833_pt }}"/>
+                    <param name="sip-port" value="{{ profile.sip_port }}"/>
+                    <param name="dialplan" value="{{ profile.dialplan }}"/>
+                    <param name="dtmf-duration" value="{{ profile.dtmf_duration }}"/>
+                    <param name="inbound-codec-prefs" value="{{ profile.inbound_codec_prefs }}"/>
+                    <param name="outbound-codec-prefs" value="{{ profile.outbound_codec_prefs }}"/>
+                    <param name="rtp-timer-name" value="{{ profile.rtp_timer_name }}"/>
+                    <param name="rtp-ip" value="{{ profile.rtp_ip }}"/>
+                    <param name="sip-ip" value="{{ profile.sip_ip }}"/>
+                    <param name="hold-music" value="{{ profile.hold_music }}"/>
+                    {% if profile.apply_nat_acl %}
+                    <param name="apply-nat-acl" value="{{ profile.apply_nat_acl }}"/>
+                    {% endif %}
+                    <param name="aggressive-nat-detection" value="{{ profile.aggressive_nat_detection|yesno:"true,false" }}"/>
+                    {% if profile.apply_inbound_acl %}
+                    <param name="apply-inbound-acl" value="{{ profile.apply_inbound_acl }}"/>
+                    {% endif %}
+                    {% if profile.local_network_acl %}
+                    <param name="local-network-acl" value="{{ profile.local_network_acl }}"/>
+                    {% endif %}
+                    {% if profile.apply_register_acl %}
+                    <param name="apply-register-acl" value="{{ profile.apply_register_acl }}"/>
+                    {% endif %}
+                    <param name="caller-id-type" value="{{ profile.caller_id_type }}"/>
+                    <param name="record-path" value="{{ profile.record_path }}"/>
+                    <param name="record-template" value="{{ profile.record_template }}"/>
+                    <param name="manage-presence" value="{{ profile.manage_presence }}"/>
+                    <param name="presence-hosts" value="{{ profile.presence_hosts }}"/>
+                    <param name="inbound-codec-negotiation" value="{{ profile.inbound_codec_negotiation }}"/>
+                    <param name="tls" value="{{ profile.tls }}"/>
+                    <param name="tls-bind-params" value="{{ profile.tls_bind_params }}"/>
+                    <param name="tls-sip-port" value="{{ profile.tls_sip_port }}"/>
+                    <param name="tls-cert-dir" value="{{ profile.tls_cert_dir }}"/>
+                    <param name="tls-version" value="{{ profile.tls_version }}"/>
+                    <param name="accept-blind-reg" value="{{ profile.accept_blind_reg|yesno:"true,false" }}"/>
+                    <param name="accept-blind-auth" value="{{ profile.accept_blind_auth|yesno:"true,false" }}"/>
+                    <param name="nonce-ttl" value="{{ profile.nonce_ttl }}"/>
+                    <param name="auth-calls" value="{{ profile.auth_calls|yesno:"true,false" }}"/>
+                    <param name="inbound-reg-force-matching-username" value="{{ profile.inbound_reg_force_matching_username|yesno:"true,false" }}"/>
+                    <param name="auth-all-packets" value="{{ profile.auth_all_packets|yesno:"true,false" }}"/>
+                    <param name="ext-rtp-ip" value="{{ profile.ext_rtp_ip }}"/>
+                    <param name="ext-sip-ip" value="{{ profile.ext_sip_ip }}"/>
+                    <param name="rtp-timeout-sec" value="{{ profile.rtp_timeout_sec }}"/>
+                    <param name="rtp-hold-timeout-sec" value="{{ profile.rtp_hold_timeout_sec }}"/>
+                    <param name="force-register-domain" value="{{ profile.force_register_domain }}"/>
+                    <param name="force-subscription-domain" value="{{ profile.force_subscription_domain }}"/>
+                    <param name="force-register-db-domain" value="{{ profile.force_register_db_domain }}"/>
+                    <param name="challenge-realm" value="{{ profile.challenge_realm }}"/>
+                    <param name="auto-jitterbuffer-msec" value="{{ profile.auto_jitterbuffer_msec }}"/>
+                    <param name="dtmf-type" value="{{ profile.dtmf_type }}"/>
+                    <param name="pass-rfc2833" value="{{ profile.pass_rfc2833|yesno:"yes,no" }}"/>
+                </settings>
+         </profile>
+        {% endfor %}
+    </profiles>
+{% endblock %}

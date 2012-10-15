@@ -1,0 +1,10 @@
+<?xml version="1.0" standalone="yes"?>
+<APPLICATION 
+    APP_FILE_PATH="sip.ld" 
+    CONFIG_FILES="http://{{ request.META.HTTP_HOST }}{% url provisioning:polycom:config "[PHONE_MODEL]" "[MACADDRESS]" %}" 
+    MISC_FILES="" 
+    LOG_FILE_DIRECTORY="" 
+    OVERRIDES_DIRECTORY="" 
+    CONTACTS_DIRECTORY="" 
+    LICENSE_DIRECTORY=""
+/>

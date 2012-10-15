@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<polycomConfig xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="polycomConfig.xsd">
+    <reg
+        {% for extension in extensions %}
+        reg.{{ forloop.counter }}.address="{{ extension.register_username }}"
+        reg.{{ forloop.counter }}.server.1.address="{{ extension.sofia_profile.domain.address }}"
+        reg.{{ forloop.counter }}.auth.userId="{{ extension.register_username }}"
+        reg.{{ forloop.counter }}.auth.password="{{ extension.register_password }}"
+        reg.{{ forloop.counter }}.displayName="{{ extension.name }}"
+        reg.{{ forloop.counter }}.label="{{ extension.name }}"
+        {% endfor %}
+    />
+</polycomConfig>
+

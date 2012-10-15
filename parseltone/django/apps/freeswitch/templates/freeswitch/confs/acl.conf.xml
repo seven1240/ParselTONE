@@ -1,0 +1,22 @@
+{% extends "freeswitch/confs/configuration_base.xml" %}
+
+{% block settings %}
+<network-lists>
+    {% for acl in acls %}
+    <list name="{{ acl.name }}" default="{{ acl.default }}">
+        {% for node in acl.nodes %}
+            {% if node.cidr %}
+                <node type="{{ node.type }}" cidr="{{ node.cidr }}"/>
+            {% endif %}
+            {% if node.domain %}
+                <node type="{{ node.type }}" domain="{{ node.domain }}"/>
+            {% endif %}
+            {% if node.host %}
+                <node type="{{ node.type }}" host="{{ node.host }}" mask="{{ node.mask }}"/>
+            {% endif %}
+        {% endfor %}
+    </list>
+    {% endfor %}
+</network-lists>
+{% endblock %}
+

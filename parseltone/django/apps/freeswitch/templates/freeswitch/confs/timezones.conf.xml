@@ -1,0 +1,11 @@
+{% extends "freeswitch/confs/base.xml" %}
+
+{% block configuration %}
+<configuration name="timezones.conf" description="Timezones">
+    <timezones>
+        {% for tz in timezones %}
+        <zone name="{{ tz.name }}" value="{{ tz.value }}" />
+        {% endfor %}
+     </timezones>
+</configuration>
+{% endblock %}

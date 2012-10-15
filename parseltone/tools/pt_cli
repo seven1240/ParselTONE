@@ -1,0 +1,652 @@
+#!/usr/bin/env python
+from argparse import ArgumentParser
+import datetime
+import logging
+from optparse import OptionParser
+import os
+import string
+import sys
+import urwid
+from twisted.internet import defer, reactor
+from parseltone.api import InboundEventSocket
+
+logger = logging.getLogger(__name__)
+
+TEXT = """
+  ______                  _____ __          __ _____  _______  _____  _    _
+ |  ____|                / ____|\ \        / /|_   _||__   __|/ ____|| |  | |
+ | |__  _ __  ___   ___ | (___   \ \  /\  / /   | |     | |  | |     | |__| |
+ |  __|| '__|/ _ \ / _ \ \___ \   \ \/  \/ /    | |     | |  | |     |  __  |
+ | |   | |  |  __/|  __/ ____) |   \  /\  /    _| |_    | |  | |____ | |  | |
+ |_|   |_|   \___| \___||_____/     \/  \/    |_____|   |_|   \_____||_|  |_|
+           _____  _____    ____ _     ___
+          |     ||_____|  / ___| |   |_ _|
+          |  O  |  | |   | |   | |    | |
+          |  ___|  | |   | |___| |___ | |
+          |_|      |_|    \____|_____|___|
+"""
+BYLINE = 'FreeSWITCH command line console, powered by ParselTONE.'
+DEFAULT_PALETTE = [
+    ('text_std', 'white', 'black', ''),
+    ('focus_std', 'black', 'light blue', ''),
+    ('text_warn', 'yellow', 'black', ''),
+    ('focus_warn', 'black', 'yellow', ''),
+    ('text_dbg', 'light cyan', 'black', ''),
+    ('focus_dbg', 'black', 'light cyan', ''),
+    ('text_err', 'light red', 'black', ''),
+    ('focus_err', 'black', 'light red', ''),
+    ('text_crit', 'dark red', 'black', ''),
+    ('focus_crit', 'black', 'dark red', ''),
+    ('text_event', 'white', 'black', ''),
+    ('focus_event', 'black', 'white', ''),
+    ('edit', 'white', 'black', ''),
+    ('edit_focused', 'white', 'dark gray', ''),
+    ('status_online', 'black', 'light green', ''),
+    ('status_online_heartbeat', 'black', 'light blue', ''),
+    ('status_offline', 'white', 'light red', ''),
+    ('status_progress_fg', 'white', 'dark gray', ''),
+    ('status_progress_bg', 'black', 'light gray', ''),
+    ('status_help', 'black', 'light gray', ''),
+    ('details_key', 'white', 'dark gray', ''),
+    ('details_value', 'black', 'light gray', ''),
+    ('bg', 'white', 'black', ''),
+    ('bg_inverted', 'black', 'white', ''),
+]
+DATETIME_FORMAT = '%d/%b/%Y %H:%M:%S'
+
+def redraw_screen():
+    try:
+        loop
+    except NameError:
+        return
+    if loop.screen.started:
+        loop.draw_screen()
+
+
+class CursesLogHandler(logging.Handler):
+    formatting_string = '[%(asctime)s] %(message)s'
+
+    def __init__(self):
+        super(CursesLogHandler, self).__init__()
+        self.setFormatter(logging.Formatter(
+            self.formatting_string, DATETIME_FORMAT))
+
+    def emit(self, record):
+        if record.levelname == 'WARNING':
+            client.event_page.add_warning(self.format(record))
+        elif record.levelname == 'DEBUG':
+            client.event_page.add_debug(self.format(record))
+        elif record.levelname == 'ERROR':
+            client.event_page.add_error(self.format(record))
+        elif record.levelname == 'CRITICAL':
+            client.event_page.add_critical(self.format(record))
+        else:
+            client.event_page.add(self.format(record))
+
+
+class Status(urwid.WidgetWrap):
+    state = 'offline'
+    online_text = 'ONLINE'
+    offline_text = 'OFFLINE'
+
+    def __init__(self):
+        self.connection_state = urwid.AttrMap(
+            urwid.Text(self.offline_text, align='center'), 'status_offline')
+        self.event_mode = urwid.Text('(F1) Events')
+        self.channel_mode = urwid.Text('(F2) Channels')
+        self.debug_mode = urwid.Text('(F7) Debug')
+        self.help_area = urwid.Text('', align='right')
+        display_widget = urwid.Columns([
+            ('fixed', 13, urwid.Padding(self.connection_state, right=1)),
+            urwid.AttrMap(urwid.Columns([
+                ('fixed', len(self.event_mode.text) + 1, self.event_mode),
+                ('fixed', len(self.channel_mode.text) + 1, self.channel_mode),
+                ('fixed', len(self.debug_mode.text) + 1, self.debug_mode),
+                self.help_area,
+            ]), 'status_help'),
+        ])
+        display_widget = urwid.AttrMap(display_widget, 'bg')
+        urwid.WidgetWrap.__init__(self, display_widget)
+
+    def flip_online(self):
+        if self.state == 'offline':
+            self.state = 'online'
+            self.update_text(self.online_text)
+
+    def flip_offline(self):
+        if self.state == 'online':
+            self.state = 'offline'
+            self.update_text(self.offline_text)
+
+    def update_text(self, new_text):
+        self.connection_state.original_widget.set_text(new_text)
+        self.connection_state.set_attr_map(
+            {None: 'status_' + self.state.lower()})
+        redraw_screen()
+
+    def update_help_text(self, text):
+        self.help_area.base_widget.set_text(text)
+
+    def heartbeat(self):
+        if self.state != 'online':
+            return
+        self.connection_state.set_attr_map({None: 'status_online_heartbeat'})
+        redraw_screen()
+        def show_online():
+            if self.state == 'online':
+                self.connection_state.set_attr_map({None: 'status_online'})
+                redraw_screen()
+        reactor.callLater(0.5, show_online)
+
+
+class Command(defer.Deferred):
+    command_delimiter = '/'
+
+    def __init__(self, command, *args):
+        defer.Deferred.__init__(self)
+        def invalid_input(cmd, *a):
+            reactor.callLater(0.1, self.errback,
+                'Unable to handle command: %r' % ' '.join((cmd,) + a))
+        # if the command starts with the command delimiter, then we want
+        ## to allow the methods on this class to handle it
+        if command.startswith(self.command_delimiter):
+            command = command[len(self.command_delimiter):]
+            cmd = getattr(self, command, None)
+            if cmd and callable(cmd):
+                defer.maybeDeferred(cmd, *args).addCallback(
+                    self.callback).addErrback(self.errback)
+                return
+            invalid_input(command, *args)
+        # if we have a freeswitch connection, pass the command to bgapi
+        elif hasattr(client, 'freeswitch'):
+            client.freeswitch.eventsocket.bgapi(command, *args).addCallback(
+                self.callback).addErrback(self.errback)
+        # command didn't have a command_delimiter, and we aren't connected
+        ## to freeswitch, so just complain about the invalid input
+        else:
+            invalid_input(command, *args)
+
+    def help(self, *args):
+        if args:
+            logger.info('You need help with: %r' % ', '.join(args))
+        else:
+            logger.info('I refuse to help you.')
+
+
+class CommandEntry(urwid.Edit):
+    def __init__(self, *args, **kwargs):
+        self.history = []
+        self.history_pos = 0
+        urwid.Edit.__init__(self, *args, **kwargs)
+
+    def keypress(self, size, key):
+        keyfunc_name_parts = ['keypress']
+        keyfunc_name_parts.extend(
+            (key.lower() if key != ' ' else 'space').split())
+        keyfunc = getattr(self, '_'.join(keyfunc_name_parts), None)
+        if keyfunc and callable(keyfunc) and keyfunc != self.keypress:
+            return keyfunc(size, key)
+        return urwid.Edit.keypress(self, size, key)
+
+    def keypress_up(self, size, key):
+        self.history_pos -= 1
+        if self.history_pos < 0:
+            self.history_pos = 0
+        try:
+            previous = self.history[self.history_pos]
+        except IndexError:
+            return
+        current = self.get_text()[0]
+        if current and self.history_pos == len(self.history):
+            self.history.append(current)
+        self.set_edit_text(previous)
+        self.set_edit_pos(len(self.edit_text))
+
+    def keypress_down(self, size, key):
+        if self.history_pos < len(self.history):
+            self.history_pos += 1
+            if self.history_pos == len(self.history):
+                self.set_edit_text('')
+            else:
+                self.set_edit_text(self.history[self.history_pos])
+            self.set_edit_pos(len(self.edit_text))
+
+    def keypress_enter(self, size, key):
+        # get the text from the edit box
+        command = self.get_text()[0].strip()
+        if not command:
+            return
+        # don't add duplicate commands in sequence to the history
+        if not self.history or self.history[-1] != command:
+            # append the command to the end of the history list
+            self.history.append(command)
+        # reset the history position to the last entry
+        self.history_pos = len(self.history)
+        # set the edit box to an empty string
+        self.set_edit_text('')
+        # parse out the command and arguments
+        if len(command.split(' ', 1)) > 1:
+            command, args = command.split(' ', 1)
+            args = args.split()
+        else:
+            args = []
+        # set up callback for the command result
+        def success(data):
+            if data:
+                logger.info(data)
+        # if the command fails, we want to handle that too
+        def failed(error):
+            logger.error(error.getErrorMessage().strip())
+        Command(command, *args).addCallback(success).addErrback(failed)
+
+    def keypress_tab(self, size, key):
+        if hasattr(client, 'freeswitch'):
+            def completion(data):
+                data = data.replace('[', '')
+                data = data.replace(']', '')
+                completions = [c.strip() for c in data.split()]
+                completions, expand = completions[:-1], completions[-1]
+                partial_len, expand = expand.split('=')[-1].split(':')
+                self.set_edit_text(self.edit_text[
+                    :len(self.edit_text)-int(partial_len)] + expand)
+                self.set_edit_pos(len(self.edit_text))
+                redraw_screen()
+                if len(completions) > 1:
+                    logger.info(completions)
+            def failed(error):
+                logger.error(error.getErrorMessage())
+            client.freeswitch.eventsocket.bgapi('console_complete',
+                self.edit_text).addCallback(completion).addErrback(failed)
+
+
+class InputArea(urwid.WidgetWrap):
+    input_help = "Type command, then <ENTER>; '/help' for assistance. " \
+        "CTRL-C to exit."
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.editbox = CommandEntry(wrap='clip')
+        self.statusbox = Status()
+        self.statusbox.update_help_text(self.input_help)
+        display_widget = urwid.LineBox(urwid.Pile([
+            self.statusbox,
+            urwid.Text(BYLINE, align='right', wrap='clip'),
+            urwid.Columns([
+                ('fixed', 2, urwid.Text('> ')),
+                urwid.AttrMap(self.editbox, 'edit', 'edit_focused'),
+            ]),
+        ]))
+        urwid.WidgetWrap.__init__(self, urwid.AttrMap(display_widget, 'bg'))
+
+    def keypress(self, size, key):
+        keyfunc_name_parts = ['keypress']
+        keyfunc_name_parts.extend(
+            (key.lower() if key != ' ' else 'space').split())
+        keyfunc = getattr(self, '_'.join(keyfunc_name_parts), None)
+        if keyfunc and callable(keyfunc) and keyfunc != self.keypress:
+            return keyfunc(size, key)
+        return self.editbox.keypress(size, key)
+
+    def keypress_f1(self, size, key):
+        client.activate_event_page()
+
+    def keypress_f2(self, size, key):
+        client.activate_channel_page()
+
+    def keypress_f7(self, size, key):
+        client.inbound_factory.protocol.debug = \
+            not client.inbound_factory.protocol.debug
+        if client.inbound_factory.protocol.debug:
+            logger.error('Debug mode ON.')
+        else:
+            logger.error('Debug mode OFF.')
+
+
+class Event(urwid.Text):
+    _selectable = True
+    ignore_focus = False
+
+    def __init__(self, markup, **kwargs):
+        markup = markup.strip()
+        markup = markup.replace('\t', ' ' * 4)
+        urwid.Text.__init__(self, markup, **kwargs)
+
+    def keypress(self, size, key):
+        keyfunc_name_parts = ['keypress']
+        keyfunc_name_parts.extend(
+            (key.lower() if key != ' ' else 'space').split())
+        keyfunc = getattr(self, '_'.join(keyfunc_name_parts), None)
+        if keyfunc and callable(keyfunc) and keyfunc != self.keypress:
+            return keyfunc(size, key)
+        return key
+
+    def details(self):
+        """
+        Returns a list of widgets describing this event.
+        """
+        return [self]
+
+
+class FreeswitchEvent(Event):
+    def __init__(self, fsevent, **kwargs):
+        self.event = fsevent
+        markup = str(fsevent).strip()
+        markup = '[%s] %s' % (
+            datetime.datetime.now().strftime('%d/%b/%Y %H:%M:%S'), markup)
+        Event.__init__(self, markup, **kwargs)
+
+    def details(self):
+        """
+        Returns a list of widgets describing this event.
+        """
+        def widgetize_header(key, value):
+            keywidget = urwid.AttrMap(
+                urwid.Padding(urwid.Text(key), align='right', right=1),
+                'details_key')
+            valuewidget = urwid.AttrMap(urwid.Text(value), 'details_value')
+            widget = urwid.Columns([
+                ('fixed', 30, keywidget),
+                valuewidget,
+            ])
+            widget._selectable = True
+            return widget
+        return [widgetize_header(k, v) for k, v in self.event.dict.items()]
+
+
+class Page(urwid.WidgetWrap):
+    default_help = "ESC to return to command mode."
+    page_help = ""
+
+    def __init__(self, display_widget, parent):
+        self.parent = parent
+        urwid.WidgetWrap.__init__(self, display_widget)
+
+    def keypress(self, size, key):
+        keyfunc_name_parts = ['keypress']
+        keyfunc_name_parts.extend(
+            (key.lower() if key != ' ' else 'space').split())
+        keyfunc = getattr(self, '_'.join(keyfunc_name_parts), None)
+        if keyfunc and callable(keyfunc) and keyfunc != self.keypress:
+            return keyfunc(size, key)
+        if self._w.original_widget.focus_part == 'footer':
+            return self._w.original_widget.get_footer().keypress(
+                (size[0],), key)
+        return self._w.original_widget.get_body().keypress(size, key)
+
+    def keypress_page_up(self, size, key):
+        """
+        Page Up changes the keyboard focus to the body section, if it isn't
+        already focused.
+        """
+        if self._w.original_widget.focus_part != 'body':
+            self.focus_body()
+            return
+        return self._w.original_widget.get_body().keypress(size, key)
+
+    def keypress_esc(self, size, key):
+        """
+        Set the keyboard focus to the input area in the footer.
+        """
+        self.focus_footer()
+
+    def focus_body(self):
+        """
+        Set the keyboard focus to the body section, and update the help text
+        in the status area.
+        """
+        if self._w.original_widget.focus_part != 'body':
+            self._w.original_widget.set_focus('body')
+            self.parent.input.statusbox.update_help_text(' '.join([
+                self.default_help, self.page_help]).strip())
+
+    def focus_footer(self):
+        """
+        Set the keyboard focus to the input area in the footer, and update
+        the help text in the status area.
+        """
+        if self._w.original_widget.focus_part != 'footer':
+            self._w.original_widget.set_focus('footer')
+            self.parent.input.statusbox.update_help_text(
+                self.parent.input.input_help)
+
+
+class EventListBox(urwid.ListBox):
+    __metaclass__ = urwid.signals.MetaSignals
+
+    signals = ["focus_change"]
+
+    def change_focus(self, size, position, *args, **kwargs):
+        urwid.ListBox.change_focus(self, size, position, *args, **kwargs)
+        oldpos = getattr(self, '_old_pos', -1)
+        if position != oldpos:
+            urwid.emit_signal(self,
+                              "focus_change", oldpos, *self.body.get_focus())
+            self._old_pos = position
+
+
+class EventPage(Page):
+    page_help = "Use up/dn arrows and pgup/pgdn keys to inspect event details."
+
+    def __init__(self, parent, title=TEXT):
+        self.logitems = [urwid.Text(title, align='center', wrap='clip')]
+        self.listbox = EventListBox(urwid.PollingListWalker(self.logitems))
+        self.details = urwid.ListBox(
+            urwid.PollingListWalker([]))
+        urwid.connect_signal(self.listbox, "focus_change",
+                             self.listbox_selection_changed)
+        display_widget = urwid.Frame(urwid.Columns([
+                ('weight', 2, self.listbox),
+                urwid.LineBox(urwid.Frame(
+                    self.details,
+                    urwid.Pile([
+                        urwid.AttrMap(urwid.Text('Details', align='center'),
+                                      'bg_inverted'),
+                        urwid.Divider(),
+                    ]),
+                )),
+            ]), footer=parent.input, focus_part='footer')
+        display_widget = urwid.AttrMap(display_widget, 'bg')
+        Page.__init__(self, display_widget, parent)
+
+    def keypress_esc(self, size, key):
+        """
+        Set the listbox focus to the last item and set keyboard focus to
+        the input area in the footer.
+        """
+        self.listbox.set_focus(len(self.logitems))
+        self.focus_footer()
+
+    def listbox_selection_changed(self, oldpos, widget, pos):
+        self.details.body.contents = widget.original_widget.details()
+        self.details._invalidate()
+
+    def _add(self, widget):
+        """
+        Add a widget to the event log.
+        """
+        focus_widget, position = self.listbox.get_focus()
+        try:
+            last_widget = self.logitems[-1]
+        except IndexError:
+            last_widget = None
+        self.logitems.append(widget)
+        if focus_widget == last_widget:
+            self.listbox.set_focus(len(self.logitems))
+        # redraw the screen
+        redraw_screen()
+
+    def add(self, text):
+        """
+        Add standard text as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(Event(text), 'text_std', 'focus_std'))
+
+    def add_warning(self, text):
+        """
+        Add warning text as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(Event(text), 'text_warn', 'focus_warn'))
+
+    def add_debug(self, text):
+        """
+        Add debug text as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(Event(text), 'text_dbg', 'focus_dbg'))
+
+    def add_error(self, text):
+        """
+        Add error text as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(Event(text), 'text_err', 'focus_err'))
+
+    def add_critical(self, text):
+        """
+        Add critical text as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(Event(text), 'text_crit', 'focus_crit'))
+
+    def add_fsevent(self, fsevent):
+        """
+        Add FreeSWITCH event as an entry in the event log.
+        """
+        self._add(urwid.AttrMap(
+            FreeswitchEvent(fsevent), 'text_event', 'focus_event'))
+
+
+class ChannelPage(Page):
+    def __init__(self, parent, title='Channel View'):
+        self.channels = {}
+        self.textbox = urwid.Text(title, align='center', wrap='clip')
+        self.listbox = urwid.ListBox(
+            urwid.PollingListWalker(self.channels.keys()))
+        display_widget = urwid.Frame(self.listbox, header=self.textbox,
+            footer=parent.input, focus_part='footer')
+        display_widget = urwid.AttrMap(display_widget, 'bg')
+        Page.__init__(self, display_widget, parent)
+
+
+class Client(InboundEventSocket):
+    muted_events = ['HEARTBEAT', 'RE_SCHEDULE']
+
+    def __init__(self):
+        self.input = InputArea(self)
+        self.event_page = EventPage(self)
+        self.channel_page = ChannelPage(self)
+        self._current_page = self.event_page
+
+    def inboundConnected(self, protocol_instance):
+        InboundEventSocket.inboundConnected(self, protocol_instance)
+        self.input.statusbox.flip_online()
+        with open(get_servers_filepath(), 'a+') as f:
+            previous_servers = [x.strip() for x in f.read().split(',') \
+                if x.strip()]
+            if not self.address in previous_servers:
+                f.write(',' + self.address)
+
+    def inboundDisconnected(self, reason):
+        InboundEventSocket.inboundDisconnected(self, reason)
+        self.input.statusbox.flip_offline()
+
+    def onAll(self, event, content):
+        if event.name not in self.muted_events:
+            client.event_page.add_fsevent(event)
+
+    def onHeartbeat(self, event, content):
+        client.input.statusbox.heartbeat()
+
+    @property
+    def current_page(self):
+        # TODO: remember the last active page?
+        return self._current_page
+
+    def activate_event_page(self):
+        if not self._current_page == self.event_page:
+            self._current_page = self.event_page
+            loop.widget = self._current_page
+
+    def activate_channel_page(self):
+        if not self._current_page == self.channel_page:
+            self._current_page = self.channel_page
+            loop.widget = self._current_page
+
+
+def get_servers_filepath():
+    home = os.getenv('USERPROFILE') or os.getenv('HOME')
+    return os.path.join(home, 'pt_cli_servers.txt')
+
+def server_string():
+    with open(get_servers_filepath(), 'a+') as f:
+        previous_servers = [x.strip() for x in f.read().split(',') if x.strip()]
+    if previous_servers:
+        print 'Select a server:'
+        for i in range(len(previous_servers)):
+            print '%d) %s' % (i+1, previous_servers[i])
+        try:
+            selected = raw_input('Enter number, or new server address: ')
+        except KeyboardInterrupt:
+            print
+            sys.exit()
+    else:
+        try:
+            selected = raw_input('Enter server address: ')
+        except KeyboardInterrupt:
+            print
+            sys.exit()
+    if not selected:
+        print
+        print 'Invalid selection!'
+        print
+        return server_string()
+    if selected in string.digits:
+        try:
+            return previous_servers[int(selected)-1]
+        except IndexError:
+            print
+            print 'Invalid selection!'
+            print
+            return server_string()
+    else:
+        return selected
+
+if __name__ == '__main__':
+#    parser = OptionParser()
+#    parser.add_option('-s', '--server', default=None,
+#        dest='server', help='Hostname or IP to connect to, with port '
+#        'if needed. (default: <use a previous server>)')
+#    parser.add_option('-p', '--password', default='ClueCon', dest='password',
+#        help='Password to use for auth with the server. (default: %default)')
+#    (options, args) = parser.parse_args()
+
+    parser = ArgumentParser(description=BYLINE)
+
+    parser.add_argument('server', metavar='HOST[:PORT]', nargs='?',
+                        help='Hostname or IP to connect to, with port if '
+                        'needed. (default: <use a previous server>)')
+    parser.add_argument('-p', '--password', default='ClueCon',
+                        help='Password to auth with the server. '
+                        '(default: %(default)s)')
+
+    mutally_exclusive = parser.add_mutually_exclusive_group()
+
+    compat_group = parser.add_argument_group('fs_cli compatibility')
+    compat_group.add_argument('-H', '--host',
+                        help='Hostname to connect to, if positional arg is '
+                        'not used.')
+    compat_group.add_argument('-P', '--port', default=8021, type=int,
+                        help='When --host is used, specify port here.')
+
+    options = parser.parse_args()
+    if not options.server:
+        options.server = server_string()
+
+    log = logging.getLogger('')
+    log.setLevel(logging.NOTSET)
+    log.addHandler(CursesLogHandler())
+
+    client = Client()
+    client.inboundConnect(options.server, password=options.password)
+
+    loop = urwid.MainLoop(client.current_page, DEFAULT_PALETTE,
+        event_loop=urwid.TwistedEventLoop())
+    loop.screen.set_terminal_properties(colors=256)
+    loop.run()

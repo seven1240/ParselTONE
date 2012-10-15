@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<document type="freeswitch/xml">
+    <section name="directory">
+        <domain name="{{ extension.sofia_profile.domain.address }}">
+            <params>
+                <param name="dial-string" value="{{ extension.sofia_profile.domain.dial_string }}"/>
+            </params>
+            <variables>
+                <variable name="record_stereo" value="{{ extension.sofia_profile.domain.record_stereo|yesno:"true,false" }}"/>
+                <variable name="default_gateway" value="{{ extension.sofia_profile.domain.default_gateway.name }}"/>
+                <variable name="default_areacode" value="{{ extension.sofia_profile.domain.default_areacode }}"/>
+                <variable name="transfer_fallback_extension" value="{{ extension.sofia_profile.domain.transfer_fallback_extension.register_username }}"/>
+            </variables>
+            <groups>
+                <group name="default">
+                    <users>
+                        <user id="{{ extension.register_username }}">
+                            <params>
+                                <param name="password" value="{{ extension.register_password }}"/>
+                                <param name="vm-password" value="{{ extension.voicemail_password }}"/>
+                            </params>
+                            <variables>
+                                <variable name="toll_allow" value="{{ extension.toll_allow }}"/>
+                                <variable name="accountcode" value="{{ extension.accountcode }}"/>
+                                <variable name="user_context" value="{{ extension.user_context }}"/>
+                                <variable name="effective_caller_id_name" value="{{ extension.effective_caller_id_name }}"/>
+                                <variable name="effective_caller_id_number" value="{{ extension.effective_caller_id_number }}"/>
+                                <variable name="outbound_caller_id_name" value="{{ extension.outbound_caller_id_name }}"/>
+                                <variable name="outbound_caller_id_number" value="{{ extension.outbound_caller_id_number }}"/>
+                                <variable name="callgroup" value="{{ extension.callgroup }}"/>
+                            </variables>
+                        </user>
+                    </users>
+                </group>
+                {# TODO: support custom groups #}
+            </groups>
+        </domain>
+    </section>
+</document>
+

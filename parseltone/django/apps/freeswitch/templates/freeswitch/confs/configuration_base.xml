@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<document type="freeswitch/xml">
+    <section name="configuration">
+        <configuration name="{% block confname %}{{ conf_name }}{% endblock %}">
+            {% block settings %}{% endblock %}
+        </configuration>
+    </section>
+</document>
+

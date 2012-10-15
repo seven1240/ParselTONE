@@ -1,0 +1,14 @@
+{% extends "freeswitch/confs/configuration_base.xml" %}
+
+{% block settings %}
+<settings>
+    <param name="nat-map" value="{{ event_socket.nat_map|yesno:"true,false" }}" />
+    <param name="listen-ip" value="{{ event_socket.listen_ip }}" />
+    <param name="listen-port" value="{{ event_socket.listen_port }}" />
+    <param name="password" value="{{ event_socket.password }}" />
+    {% if event_socket.apply_inbound_acl %}
+    <param name="apply-inbound-acl" value="{{ event_socket.apply_inbound_acl }}" />
+    {% endif %}
+</settings>
+{% endblock %}
+
